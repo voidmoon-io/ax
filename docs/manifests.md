@@ -108,6 +108,30 @@ spec:
     key: GEMINI_API_KEY
 ```
 
+For a self-hosted OpenAI-compatible server -- vLLM, Ollama, LM Studio -- set
+`provider: openai` and put the API root in `parameters.baseURL`. The base URL
+includes the version segment the server exposes, and `model` is the name that
+server serves. `secretKey` is optional: a vLLM server started without
+`--api-key` takes unauthenticated requests.
+
+```yaml
+apiVersion: ax.io/v1alpha1
+kind: Model
+metadata:
+  name: local-vllm
+  atespace: default
+spec:
+  provider: openai
+  model: Qwen/Qwen3-4B-Instruct-2507
+  parameters:
+    baseURL: http://vllm.vllm.svc.cluster.local:8000/v1
+    temperature: 0.2
+```
+
+This configures the model the platform itself uses. To point the agent inside a
+sandbox at the same server, set `AX_MODEL_BASE_URL` (and optionally
+`AX_MODEL_NAME`, `AX_MODEL_API_KEY`) in the task's `spec.env`.
+
 For Anthropic models, store the key the same way and set `provider: anthropic`.
 
 ```bash

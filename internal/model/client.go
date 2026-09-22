@@ -38,6 +38,10 @@ import (
 // Supported providers and default models
 const (
 	ProviderGoogle = "google"
+	// ProviderOpenAI is any endpoint that speaks the OpenAI chat completions
+	// API, including a self-hosted vLLM server. It requires a base URL; see
+	// baseURLParam.
+	ProviderOpenAI = "openai"
 
 	DefaultModel             = "gemini-3.8-flash"
 	DefaultModelResourceName = "default-model"
@@ -49,6 +53,12 @@ const (
 // systemInstructionParam is the Parameters key holding a default system
 // instruction. It is not a generation parameter, so it is lifted out of the map.
 const systemInstructionParam = "systemInstruction"
+
+// baseURLParam is the Parameters key holding the provider base URL. Like
+// systemInstruction it is not a generation parameter, so it is lifted out of
+// the map. It is how a Model points at a self-hosted endpoint, for example an
+// in-cluster vLLM server, without a dedicated field on ModelSpec.
+const baseURLParam = "baseURL"
 
 // SecretKeyRef references a secret key for authentication.
 type SecretKeyRef = v1alpha1.SecretKeyRef
@@ -78,19 +88,24 @@ func ConfigFromSpec(spec *v1alpha1.ModelSpec) Config {
 		return DefaultConfig()
 	}
 	secKey := spec.SecretKey
-	if secKey == nil {
+	// The Gemini secret is only a sensible default for Gemini. An
+	// OpenAI-compatible endpoint such as vLLM often needs no key at all.
+	if secKey == nil && isGoogleProvider(spec.Provider) {
 		secKey = &SecretKeyRef{
 			Name: DefaultSecretName,
 			Key:  DefaultSecretKey,
 		}
 	}
+	params := spec.GetParameters().AsMap()
+	baseURL, _ := params[baseURLParam].(string)
 	return Config{
 		Name:       DefaultModelResourceName,
 		Atespace:   DefaultAtespace,
 		Provider:   spec.Provider,
 		Model:      spec.Model,
-		Parameters: spec.GetParameters().AsMap(),
+		Parameters: params,
 		SecretKey:  secKey,
+		BaseURL:    strings.TrimRight(baseURL, "/"),
 	}
 }
 
@@ -484,8 +499,11 @@ func (c *Client) Generate(ctx context.Context, req *GenerateRequest) (*GenerateR
 	}
 
 	provider := strings.ToLower(c.cfg.Provider)
-	if provider == "" || provider == ProviderGoogle {
+	if isGoogleProvider(provider) {
 		return c.generateGoogle(ctx, effectiveReq)
+	}
+	if provider == ProviderOpenAI {
+		return c.generateOpenAI(ctx, effectiveReq)
 	}
 
 	if c.cfg.DisableRemote {
@@ -529,7 +547,7 @@ func (c *Client) generateGoogle(ctx context.Context, req *GenerateRequest) (*Gen
 	// Configured parameters go through as-is; per-request values override them.
 	genConfig := map[string]interface{}{}
 	for k, v := range c.cfg.Parameters {
-		if k != systemInstructionParam {
+		if !isReservedParam(k) {
 			genConfig[k] = v
 		}
 	}
@@ -603,6 +621,117 @@ func (c *Client) generateGoogle(ctx context.Context, req *GenerateRequest) (*Gen
 			TotalTokens:      geminiResp.UsageMetadata.TotalTokenCount,
 		},
 	}, nil
+}
+
+// generateOpenAI communicates with any OpenAI-compatible chat completions API.
+// The base URL is required and points at the API root including its version
+// segment, for example http://vllm.vllm.svc.cluster.local:8000/v1. An API key
+// is optional: a vLLM server started without --api-key accepts unauthenticated
+// requests, so the Authorization header is only set when a key is configured.
+func (c *Client) generateOpenAI(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	if c.cfg.DisableRemote {
+		return c.fallbackResponse(req), nil
+	}
+	if c.cfg.BaseURL == "" {
+		return nil, fmt.Errorf("provider %q requires a base URL; set spec.parameters.%s on the model", ProviderOpenAI, baseURLParam)
+	}
+
+	messages := []map[string]string{}
+	if req.SystemInstruction != "" {
+		messages = append(messages, map[string]string{"role": "system", "content": req.SystemInstruction})
+	}
+	messages = append(messages, map[string]string{"role": "user", "content": req.Prompt})
+
+	payload := map[string]interface{}{
+		"model":    req.Model,
+		"messages": messages,
+	}
+	// Configured parameters go through as-is; per-request values override them.
+	for k, v := range c.cfg.Parameters {
+		if !isReservedParam(k) {
+			payload[k] = v
+		}
+	}
+	if req.Temperature > 0 {
+		payload["temperature"] = req.Temperature
+	}
+	if req.MaxTokens > 0 {
+		payload["max_tokens"] = req.MaxTokens
+	}
+
+	reqBody, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling request: %w", err)
+	}
+
+	endpoint := c.cfg.BaseURL + "/chat/completions"
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("creating http request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if c.cfg.APIKey != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return c.fallbackResponse(req), nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable || resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return c.fallbackResponse(req), nil
+		}
+		return nil, fmt.Errorf("openai api error %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+	}
+
+	var openaiResp struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+		Usage struct {
+			PromptTokens     int `json:"prompt_tokens"`
+			CompletionTokens int `json:"completion_tokens"`
+			TotalTokens      int `json:"total_tokens"`
+		} `json:"usage"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&openaiResp); err != nil {
+		return nil, fmt.Errorf("decoding openai response: %w", err)
+	}
+
+	var content string
+	if len(openaiResp.Choices) > 0 {
+		content = openaiResp.Choices[0].Message.Content
+	}
+
+	return &GenerateResponse{
+		Model:   req.Model,
+		Content: content,
+		Usage: UsageStats{
+			PromptTokens:     openaiResp.Usage.PromptTokens,
+			CompletionTokens: openaiResp.Usage.CompletionTokens,
+			TotalTokens:      openaiResp.Usage.TotalTokens,
+		},
+	}, nil
+}
+
+// isGoogleProvider reports whether provider names Gemini, which is also what an
+// empty provider means.
+func isGoogleProvider(provider string) bool {
+	p := strings.ToLower(provider)
+	return p == "" || p == ProviderGoogle
+}
+
+// isReservedParam reports whether a Parameters key is lifted out of the map
+// rather than passed to the provider as a generation setting.
+func isReservedParam(key string) bool {
+	return key == systemInstructionParam || key == baseURLParam
 }
 
 func (c *Client) fallbackResponse(req *GenerateRequest) *GenerateResponse {

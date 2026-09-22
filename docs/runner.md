@@ -18,6 +18,7 @@ The control plane does not run `spec.command` as the container entrypoint. It al
 | `AX_WORKSPACE_YAML` | The bound `Workspace` resource as YAML; unset when the task binds none |
 | `spec.env` entries | Each one set directly in the container environment |
 | `GEMINI_API_KEY` | Set when the atespace has a Gemini credential configured |
+| `AX_MODEL_BASE_URL` | Through `spec.env`: an OpenAI-compatible endpoint the agent uses instead of Gemini, with `AX_MODEL_NAME` and `AX_MODEL_API_KEY` alongside it |
 | Volume | A durable directory mounted at `/workspace` |
 | Readiness probe | `GET /readyz` on port 80 |
 
