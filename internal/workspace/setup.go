@@ -44,8 +44,13 @@ const (
 	gitRetryDelay = 2 * time.Second
 
 	bootstrapScriptPath = "/usr/local/bin/antigravity_bootstrap.py"
-	// bootstrapAPIKeyEnv must be set for the Antigravity agent to run.
+	// bootstrapAPIKeyEnv must be set for the Antigravity agent to run against
+	// Gemini.
 	bootstrapAPIKeyEnv = "GEMINI_API_KEY"
+	// bootstrapBaseURLEnv points the agent at an OpenAI-compatible endpoint,
+	// for example an in-cluster vLLM server, instead of Gemini. When it is set
+	// the Gemini key is not required.
+	bootstrapBaseURLEnv = "AX_MODEL_BASE_URL"
 	// bootstrapTimeoutEnv overrides the default bootstrap timeout with a Go duration string.
 	bootstrapTimeoutEnv = "AX_BOOTSTRAP_TIMEOUT"
 	// bootstrapDataDir, under AXDir, is where the agent keeps its own state so
@@ -272,7 +277,8 @@ func setupSkills(skills *v1alpha1.SkillsConfig) string {
 
 // runBootstrap hands the goal to the Antigravity agent so it can prepare the workspace.
 // It reports whether the agent ran to completion. The agent needs the bootstrap script
-// installed and an API key in the environment; when either is missing the step is
+// installed and a model to talk to: either a Gemini API key or the base URL of an
+// OpenAI-compatible endpoint in the environment. When either is missing the step is
 // skipped with a log line. Failures are logged and otherwise ignored so the task's own
 // command still starts.
 func runBootstrap(ctx context.Context, goal, targetPath string) bool {
@@ -280,8 +286,9 @@ func runBootstrap(ctx context.Context, goal, targetPath string) bool {
 		slog.Info("Antigravity bootstrap script not installed; skipping", "script", bootstrapScriptPath)
 		return false
 	}
-	if os.Getenv(bootstrapAPIKeyEnv) == "" {
-		slog.Warn("workspace goal set but no API key available; skipping Antigravity bootstrap", "env", bootstrapAPIKeyEnv)
+	if os.Getenv(bootstrapAPIKeyEnv) == "" && os.Getenv(bootstrapBaseURLEnv) == "" {
+		slog.Warn("workspace goal set but no model endpoint available; skipping Antigravity bootstrap",
+			"env", bootstrapAPIKeyEnv, "alternative", bootstrapBaseURLEnv)
 		return false
 	}
 

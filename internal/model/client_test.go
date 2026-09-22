@@ -17,6 +17,7 @@ package model_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -282,6 +283,77 @@ func TestClient_DefaultModelStore(t *testing.T) {
 	}
 	if clientWithStore.Config().APIKey != "store-secret-resolved-999" {
 		t.Errorf("expected APIKey 'store-secret-resolved-999', got %q", clientWithStore.Config().APIKey)
+	}
+}
+
+// TestClient_OpenAIProvider exercises the OpenAI-compatible path a self-hosted
+// vLLM server serves: the base URL arrives through spec.parameters, the request
+// is a chat completion, and the key is optional.
+func TestClient_OpenAIProvider(t *testing.T) {
+	var gotPath, gotAuth string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"choices":[{"message":{"role":"assistant","content":"plan ready"}}],`+
+			`"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14}}`)
+	}))
+	defer ts.Close()
+
+	crd := &v1alpha1.Model{
+		Metadata: &v1alpha1.ObjectMeta{Name: "local-vllm", Atespace: "default"},
+		Spec: &v1alpha1.ModelSpec{
+			Provider: "openai",
+			Model:    "Qwen/Qwen3-4B-Instruct-2507",
+			Parameters: params(t, map[string]any{
+				"baseURL":     ts.URL + "/v1",
+				"temperature": 0.2,
+			}),
+		},
+	}
+
+	client := model.NewClientFromCRD(crd)
+	if got := client.Config().BaseURL; got != ts.URL+"/v1" {
+		t.Errorf("expected base URL %q lifted out of parameters, got %q", ts.URL+"/v1", got)
+	}
+
+	resp, err := client.Generate(context.Background(), &model.GenerateRequest{Prompt: "Bootstrap workspace"})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if gotPath != "/v1/chat/completions" {
+		t.Errorf("expected /v1/chat/completions, got %s", gotPath)
+	}
+	if gotAuth != "" {
+		t.Errorf("expected no Authorization header without a key, got %q", gotAuth)
+	}
+	if gotBody["model"] != "Qwen/Qwen3-4B-Instruct-2507" {
+		t.Errorf("expected the served model name in the request, got %v", gotBody["model"])
+	}
+	if gotBody["temperature"] != 0.2 {
+		t.Errorf("expected temperature 0.2 passed through, got %v", gotBody["temperature"])
+	}
+	if _, ok := gotBody["baseURL"]; ok {
+		t.Error("baseURL should be lifted out of the parameters, not sent to the provider")
+	}
+	if resp.Content != "plan ready" {
+		t.Errorf("expected content 'plan ready', got %q", resp.Content)
+	}
+	if resp.Usage.TotalTokens != 14 {
+		t.Errorf("expected 14 total tokens, got %d", resp.Usage.TotalTokens)
+	}
+}
+
+// TestClient_OpenAIProviderRequiresBaseURL checks the error a Model without a
+// base URL produces, since there is no sensible default endpoint.
+func TestClient_OpenAIProviderRequiresBaseURL(t *testing.T) {
+	client := model.NewClient(model.Config{Provider: "openai", Model: "local"})
+	if _, err := client.Generate(context.Background(), &model.GenerateRequest{Prompt: "hi"}); err == nil {
+		t.Fatal("expected an error when no base URL is configured")
 	}
 }
 
