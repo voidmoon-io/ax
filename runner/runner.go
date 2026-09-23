@@ -123,11 +123,24 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = metaServer.Stop(context.Background())
 	}()
 
-	if _, err := workspace.SetupWorkspace(ctx, cfg.Workspace, wsPath, ref.GetGoal()); err != nil {
+	if _, err := workspace.PrepareWorkspace(ctx, cfg.Workspace, wsPath); err != nil {
 		slog.Error("workspace maiden run setup failed", "workspace", ref.GetName(), "path", wsPath, "error", err)
 	} else {
 		metaServer.SetWorkspaceReady(true)
 		slog.Info("workspace maiden run setup marked ready", "path", wsPath)
+	}
+
+	// The goal runs only once the sandbox is ready, and in the background: the
+	// agent needs the network, and Substrate's egress proxy carries traffic only
+	// for an actor its control plane considers running, which it is not until
+	// the readiness endpoint above answers. The task's own command starts
+	// meanwhile.
+	if goal := ref.GetGoal(); metaServer.IsWorkspaceReady() && goal != "" {
+		go func() {
+			if workspace.RunGoal(ctx, wsPath, goal) {
+				slog.Info("workspace goal completed", "workspace", ref.GetName(), "path", wsPath)
+			}
+		}()
 	}
 
 	cmdArgs := cfg.Task.GetSpec().GetCommand()

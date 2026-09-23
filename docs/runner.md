@@ -33,7 +33,8 @@ The `/workspace` volume is what survives suspend and resume. Agent Substrate sna
 | Path | Behavior |
 |---|---|
 | `/healthz` | Return `200` as soon as the runner is alive. |
-| `/readyz` | Return `503` until the workspace is prepared, then `200`. AX polls this to set the task's `WorkspaceReady` condition, and `ax watch` shows the transition. |
+| `/readyz` | Return `200` as soon as you are serving. This is Agent Substrate's container probe, and the sandbox gets no egress until it passes -- so anything that prepares a workspace over the network deadlocks if you hold it back. |
+| `/readyz?check=workspace` | Return `503` until the workspace is prepared, then `200`. AX polls this to set the task's `WorkspaceReady` condition, and `ax watch` shows the transition. |
 
 **Serve metadata on loopback.** These endpoints are for your command, so serve them on a loopback address (the default runner uses `127.0.0.1:8099`) and pass that base URL as `AX_METADATA_URL`. Don't serve them on port 80.
 
@@ -42,7 +43,9 @@ The `/workspace` volume is what survives suspend and resume. Agent Substrate sna
 | `/metadata/v1alpha1/ax/task` | Return the `Task` as `application/yaml`. Optional, but your command and `ax` tooling may expect it. |
 | `/metadata/v1alpha1/ax/workspace` | Return the bound `Workspace` as `application/yaml`, or `404` when there is none. Optional, as above. |
 
-**Prepare the workspace once.** A task binds at most one workspace through `spec.workspace`. At the binding's path, `/workspace` unless it sets one, clone the Git repos from `spec.git`, create the skills path, write any MCP configuration, and run any environment bootstrap the binding asks for through its `goal`. A task with no binding gets an empty `/workspace`. Record that setup happened somewhere on the durable volume or in a known location, then skip the work on later boots. Resume restarts the container, and re-cloning into a restored workspace would destroy the agent's state. The default runner writes a marker file under `/ax`.
+**Report ready before you need the network.** A sandbox has no egress until Agent Substrate's control plane considers the actor running, which follows the first `200` from `/readyz`. Anything that calls out -- an agent working towards a goal, most obviously -- has to happen after that, not during preparation.
+
+**Prepare the workspace once.** A task binds at most one workspace through `spec.workspace`. At the binding's path, `/workspace` unless it sets one, clone the Git repos from `spec.git`, create the skills path, write any MCP configuration, and, once `/readyz` has answered, run any environment bootstrap the binding asks for through its `goal`. A task with no binding gets an empty `/workspace`. Record that setup happened somewhere on the durable volume or in a known location, then skip the work on later boots. Resume restarts the container, and re-cloning into a restored workspace would destroy the agent's state. The default runner writes a marker file under `/ax`.
 
 **Run the command and supervise it.** Start `spec.command` as a child process with the workspace path as its working directory. Give it `AX_METADATA_URL` pointing at your loopback metadata server plus every `spec.env` entry. Put it in its own process group so you can signal everything it spawns.
 

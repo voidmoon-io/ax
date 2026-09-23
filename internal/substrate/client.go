@@ -231,6 +231,13 @@ const (
 	// actorDeletingWaitAttempts bounds how many times EnsureActor retries creation
 	// while a previous actor with the same name is still being deleted.
 	actorDeletingWaitAttempts = 20
+
+	// readyzTimeout is how long Substrate waits for the guest to report ready.
+	// Plain /readyz answers as soon as the runner serves, so this only needs to
+	// cover runner start-up; Substrate's 30-second default is tight on a cold
+	// node. Workspace preparation is reported separately (?check=workspace),
+	// because it needs the egress that readiness unlocks.
+	readyzTimeout = 5 * time.Minute
 )
 
 var (
@@ -353,6 +360,7 @@ func BuildActorTemplate(atespace, name, image string, envMap map[string]string, 
 					Path: "/readyz",
 					Port: 80,
 				},
+				TimeoutSeconds: int32(readyzTimeout.Seconds()),
 			},
 			VolumeMounts: []*ateapipb.VolumeMount{{
 				Name:      "workspace",
