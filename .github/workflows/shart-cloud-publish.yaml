@@ -57,6 +57,9 @@ jobs:
           image="ghcr.io/shart-cloud/ax/ax-task-runner:${{ inputs.ref }}"
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
             -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner
+          # Upstream .dockerignore excludes bin/, which Dockerfile.task-runner
+          # COPYs from (their Makefile target fails the same way).
+          sed -i '/^bin\/$/d' .dockerignore
           docker build --platform linux/amd64 -t "${image}" -f Dockerfile.task-runner .
           docker push "${image}"
           docker inspect --format '{{index .RepoDigests 0}}' "${image}" > out/task-runner-image.txt
