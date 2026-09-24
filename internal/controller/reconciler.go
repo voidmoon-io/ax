@@ -166,6 +166,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, ws 
 	if geminiKey := r.lookupGeminiKey(ctx, atespace); geminiKey != "" {
 		extraEnv[geminiSecretKey] = geminiKey
 	}
+	injectModelEnv(ctx, r.SecretResolver, osGetenv, atespace, extraEnv)
 
 	// Only launch configuration belongs in the template; status changes
 	// must not create new golden snapshots.
