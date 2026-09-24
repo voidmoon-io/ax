@@ -35,13 +35,20 @@ jobs:
       # Logs in to ghcr.io and sets KO_DOCKER_REPO=ghcr.io/shart-cloud/ax.
       - uses: ko-build/setup-ko@v0.9
 
+      - name: Test
+        run: go test ./internal/controller/... ./internal/model/... ./internal/workspace/... ./internal/metadata/...
+
+      # Branch refs (shart-cloud/openai-provider) aren't valid image tags.
+      - name: Image tag
+        run: echo "TAG=$(echo '${{ inputs.ref }}' | tr '/' '-')" >> "$GITHUB_ENV"
+
       - name: Render control plane
         run: |
           set -o errexit -o nounset -o pipefail
           mkdir -p out
           cp deploy/redis.yaml out/
-          ko resolve -B -t "${{ inputs.ref }}" -f deploy/ax-controller.yaml > out/ax-controller.yaml
-          ko resolve -B -t "${{ inputs.ref }}" -f deploy/ax-server.yaml > out/ax-server.yaml
+          ko resolve -B -t "${TAG}" -f deploy/ax-controller.yaml > out/ax-controller.yaml
+          ko resolve -B -t "${TAG}" -f deploy/ax-server.yaml > out/ax-server.yaml
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o out/ax ./cmd/ax
           git rev-parse HEAD > out/SOURCE_COMMIT
 
@@ -54,7 +61,7 @@ jobs:
       - name: Build and push task runner
         run: |
           set -o errexit -o nounset -o pipefail
-          image="ghcr.io/shart-cloud/ax/ax-task-runner:${{ inputs.ref }}"
+          image="ghcr.io/shart-cloud/ax/ax-task-runner:${TAG}"
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
             -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner
           # Upstream .dockerignore excludes bin/, which Dockerfile.task-runner
