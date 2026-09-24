@@ -1,0 +1,67 @@
+# shart-cloud fork only: builds the AX control plane with ko and the task runner
+# image with docker, pushes them to ghcr.io/shart-cloud/ax/*, and uploads the
+# digest-pinned deploy manifests as an artifact for talos-gitops.
+#
+# Upstream's default task image (gcr.io/ax-substrate/...) is private and
+# hard-coded, so every Task must set spec.image to the task runner built here.
+name: shart-cloud publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Tag/commit to build
+        required: true
+        default: v0.3.0
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      KO_DEFAULTPLATFORMS: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Logs in to ghcr.io and sets KO_DOCKER_REPO=ghcr.io/shart-cloud/ax.
+      - uses: ko-build/setup-ko@v0.9
+
+      - name: Render control plane
+        run: |
+          set -o errexit -o nounset -o pipefail
+          mkdir -p out
+          cp deploy/redis.yaml out/
+          ko resolve -B -t "${{ inputs.ref }}" -f deploy/ax-controller.yaml > out/ax-controller.yaml
+          ko resolve -B -t "${{ inputs.ref }}" -f deploy/ax-server.yaml > out/ax-server.yaml
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o out/ax ./cmd/ax
+          git rev-parse HEAD > out/SOURCE_COMMIT
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push task runner
+        run: |
+          set -o errexit -o nounset -o pipefail
+          image="ghcr.io/shart-cloud/ax/ax-task-runner:${{ inputs.ref }}"
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+            -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner
+          docker build --platform linux/amd64 -t "${image}" -f Dockerfile.task-runner .
+          docker push "${image}"
+          docker inspect --format '{{index .RepoDigests 0}}' "${image}" > out/task-runner-image.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ax-manifests
+          path: out/
