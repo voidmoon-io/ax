@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/ax/internal/model"
 	"github.com/google/ax/internal/substrate"
 	"github.com/google/ax/pkg/apis/v1alpha1"
@@ -73,6 +74,10 @@ type TaskReconciler struct {
 	// WorkspaceReadyTimeout bounds how long Reconcile waits for the actor's workspace
 	// to report ready before recording it as still initializing.
 	WorkspaceReadyTimeout time.Duration
+
+	// EgressPolicy, when set, is applied to every task's actor. Substrate denies
+	// all egress to an actor without one, so without it a task has no network.
+	EgressPolicy *ateapipb.EgressPolicy
 }
 
 // NewTaskReconciler creates a new TaskReconciler. Empty defaults fall back to
@@ -231,6 +236,16 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, ws 
 		r.setNotReady(task, "ActorCreationFailed", err.Error(), now)
 		task.Status.Phase = "Failed"
 		return task, fmt.Errorf("ensuring actor: %w", err)
+	}
+
+	// The policy must be in place before the actor resumes: the runner clones
+	// repositories and reaches its model as soon as it starts.
+	if r.EgressPolicy != nil {
+		if err := r.client.EnsureActorEgressPolicy(ctx, atespace, actorName, r.EgressPolicy.GetRules()); err != nil {
+			r.setNotReady(task, "EgressPolicyFailed", err.Error(), now)
+			task.Status.Phase = "Failed"
+			return task, fmt.Errorf("ensuring egress policy: %w", err)
+		}
 	}
 
 	// 4. Suspend or Resume the Actor

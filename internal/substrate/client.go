@@ -35,6 +35,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 // ClientOptions configures connection to the Substrate Control API server.
@@ -497,6 +499,71 @@ func (c *Client) EnsureActor(ctx context.Context, atespace, actorName, templateA
 		return nil, fmt.Errorf("creating actor %s/%s: %w", atespace, actorName, err)
 	}
 	return actor, nil
+}
+
+// egressPolicyName is the only name Substrate accepts for an Actor's egress
+// policy: an Actor has at most one, and it is always "default".
+const egressPolicyName = "default"
+
+// LoadEgressPolicy reads an EgressPolicy from a protojson file, as written by
+// an operator: only rules are honoured; metadata is set per actor.
+func LoadEgressPolicy(path string) (*ateapipb.EgressPolicy, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading egress policy: %w", err)
+	}
+	policy := &ateapipb.EgressPolicy{}
+	if err := protojson.Unmarshal(data, policy); err != nil {
+		return nil, fmt.Errorf("parsing egress policy %s: %w", path, err)
+	}
+	policy.Metadata = nil
+	return policy, nil
+}
+
+// EnsureActorEgressPolicy makes the actor's egress policy carry exactly the
+// given rules, creating the policy if the actor has none. Substrate denies all
+// egress to an actor without a policy, so an agent that needs the network --
+// to clone a repository or reach its model -- needs one before it resumes.
+func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, actorName string, rules []*ateapipb.EgressRule) error {
+	actorRef := &ateapipb.ObjectRef{Atespace: atespace, Name: actorName}
+	want := &ateapipb.EgressPolicy{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: egressPolicyName},
+		Rules:    rules,
+	}
+
+	existing, err := c.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef})
+	if status.Code(err) == codes.NotFound {
+		_, err = c.control.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{Actor: actorRef, EgressPolicy: want})
+		if err != nil {
+			return fmt.Errorf("creating egress policy for actor %s/%s: %w", atespace, actorName, err)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("getting egress policy for actor %s/%s: %w", atespace, actorName, err)
+	}
+	if rulesEqual(existing.GetRules(), rules) {
+		return nil
+	}
+	// Carry the server-managed metadata (version) so the update is not
+	// rejected as stale.
+	want.Metadata = existing.GetMetadata()
+	if _, err := c.control.UpdateActorEgressPolicy(ctx, &ateapipb.UpdateActorEgressPolicyRequest{Actor: actorRef, EgressPolicy: want}); err != nil {
+		return fmt.Errorf("updating egress policy for actor %s/%s: %w", atespace, actorName, err)
+	}
+	return nil
+}
+
+func rulesEqual(a, b []*ateapipb.EgressRule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if !proto.Equal(a[i], b[i]) {
+			return false
+		}
+	}
+	return true
 }
 
 // ResumeActor resumes the specified actor onto a worker and returns the worker details.
