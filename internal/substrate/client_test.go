@@ -17,6 +17,8 @@ package substrate
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -138,5 +140,126 @@ func TestClient_DeleteActor_PropagatesRPCError(t *testing.T) {
 	err := c.DeleteActor(ctx, "test-ns", "test-actor")
 	if err == nil {
 		t.Fatal("expected error, got nil")
+	}
+}
+
+type mockEgressControlClient struct {
+	ateapipb.ControlClient
+
+	existing *ateapipb.EgressPolicy
+	creates  []*ateapipb.CreateActorEgressPolicyRequest
+	updates  []*ateapipb.UpdateActorEgressPolicyRequest
+}
+
+func (m *mockEgressControlClient) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	if m.existing == nil {
+		return nil, status.Error(codes.NotFound, "egress policy not found")
+	}
+	return m.existing, nil
+}
+
+func (m *mockEgressControlClient) CreateActorEgressPolicy(ctx context.Context, req *ateapipb.CreateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	m.creates = append(m.creates, req)
+	return req.GetEgressPolicy(), nil
+}
+
+func (m *mockEgressControlClient) UpdateActorEgressPolicy(ctx context.Context, req *ateapipb.UpdateActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	m.updates = append(m.updates, req)
+	return req.GetEgressPolicy(), nil
+}
+
+func hostnameRule(patterns ...string) *ateapipb.EgressRule {
+	return &ateapipb.EgressRule{Hostnames: &ateapipb.HostnameRule{Patterns: patterns}}
+}
+
+// TestEnsureActorEgressPolicy covers the three cases a reconcile meets: an actor
+// without a policy gets one, an unchanged policy is left alone, and a changed
+// one is replaced carrying the server's metadata.
+func TestEnsureActorEgressPolicy(t *testing.T) {
+	rules := []*ateapipb.EgressRule{hostnameRule("model-proxy.ax-system.svc.cluster.local")}
+
+	t.Run("creates", func(t *testing.T) {
+		mock := &mockEgressControlClient{}
+		c := &Client{control: mock}
+		if err := c.EnsureActorEgressPolicy(context.Background(), "default", "task1", rules); err != nil {
+			t.Fatal(err)
+		}
+		if len(mock.creates) != 1 || len(mock.updates) != 0 {
+			t.Fatalf("expected 1 create and 0 updates, got %d and %d", len(mock.creates), len(mock.updates))
+		}
+		req := mock.creates[0]
+		if req.GetActor().GetName() != "task1" || req.GetActor().GetAtespace() != "default" {
+			t.Errorf("unexpected parent actor %v", req.GetActor())
+		}
+		md := req.GetEgressPolicy().GetMetadata()
+		if md.GetName() != "default" || md.GetAtespace() != "default" {
+			t.Errorf("expected policy default in the actor's atespace, got %v", md)
+		}
+	})
+
+	t.Run("unchanged", func(t *testing.T) {
+		mock := &mockEgressControlClient{existing: &ateapipb.EgressPolicy{Rules: rules}}
+		c := &Client{control: mock}
+		if err := c.EnsureActorEgressPolicy(context.Background(), "default", "task1", rules); err != nil {
+			t.Fatal(err)
+		}
+		if len(mock.creates)+len(mock.updates) != 0 {
+			t.Fatalf("expected no writes for an unchanged policy, got %d creates and %d updates", len(mock.creates), len(mock.updates))
+		}
+	})
+
+	t.Run("updates", func(t *testing.T) {
+		md := &ateapipb.ResourceMetadata{Atespace: "default", Name: "default", Version: 7}
+		mock := &mockEgressControlClient{existing: &ateapipb.EgressPolicy{Metadata: md, Rules: []*ateapipb.EgressRule{hostnameRule("old.example.com")}}}
+		c := &Client{control: mock}
+		if err := c.EnsureActorEgressPolicy(context.Background(), "default", "task1", rules); err != nil {
+			t.Fatal(err)
+		}
+		if len(mock.updates) != 1 {
+			t.Fatalf("expected 1 update, got %d", len(mock.updates))
+		}
+		got := mock.updates[0].GetEgressPolicy()
+		if got.GetMetadata().GetVersion() != 7 {
+			t.Errorf("expected the server's metadata carried into the update, got %v", got.GetMetadata())
+		}
+		if !rulesEqual(got.GetRules(), rules) {
+			t.Errorf("expected the new rules, got %v", got.GetRules())
+		}
+	})
+}
+
+// TestLoadEgressPolicy reads the protojson an operator mounts from a ConfigMap,
+// and drops any metadata in it, since that is set per actor.
+func TestLoadEgressPolicy(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "policy.json")
+	data := `{
+  "metadata": {"name": "ignored"},
+  "rules": [
+    {"hostnames": {"patterns": ["model-proxy.ax-system.svc.cluster.local", "*.github.com"]}},
+    {"cidrs": {"cidrs": ["0.0.0.0/5"]}}
+  ]
+}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := LoadEgressPolicy(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policy.GetMetadata() != nil {
+		t.Errorf("expected metadata dropped, got %v", policy.GetMetadata())
+	}
+	if n := len(policy.GetRules()); n != 2 {
+		t.Fatalf("expected 2 rules, got %d", n)
+	}
+	if got := policy.GetRules()[1].GetCidrs().GetCidrs(); len(got) != 1 || got[0] != "0.0.0.0/5" {
+		t.Errorf("unexpected cidr rule %v", got)
+	}
+
+	if err := os.WriteFile(path, []byte(`{"rules": [{"nope": {}}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadEgressPolicy(path); err == nil {
+		t.Error("expected an error for an unknown field")
 	}
 }

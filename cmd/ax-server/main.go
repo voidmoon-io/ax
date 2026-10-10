@@ -45,6 +45,7 @@ func main() {
 		substratePlaintext      bool
 		defaultTemplate         string
 		defaultTemplateAtespace string
+		egressPolicyFile        string
 	)
 
 	flag.StringVar(&listenAddr, "addr", ":8080", "HTTP listen address")
@@ -58,6 +59,7 @@ func main() {
 	flag.BoolVar(&substratePlaintext, "substrate-plaintext", false, "Use insecure plaintext gRPC connection to Substrate")
 	flag.StringVar(&defaultTemplate, "template", "default-template", "Default Substrate ActorTemplate name")
 	flag.StringVar(&defaultTemplateAtespace, "template-atespace", "ax-system", "Default Substrate ActorTemplate atespace")
+	flag.StringVar(&egressPolicyFile, "egress-policy-file", "", "Path to a JSON Substrate EgressPolicy applied to every task's actor; without one, tasks have no egress")
 	flag.Parse()
 
 	if envAddr := os.Getenv("ADDR"); envAddr != "" {
@@ -102,7 +104,17 @@ func main() {
 		slog.Warn("could not initialize substrate client; running without substrate reconciliation", "error", err)
 	} else {
 		defer subClient.Close()
-		reconciler = controller.NewTaskReconciler(subClient, defaultTemplate, defaultTemplateAtespace)
+		taskReconciler := controller.NewTaskReconciler(subClient, defaultTemplate, defaultTemplateAtespace)
+		if egressPolicyFile != "" {
+			policy, err := substrate.LoadEgressPolicy(egressPolicyFile)
+			if err != nil {
+				slog.Error("could not load egress policy", "file", egressPolicyFile, "error", err)
+				os.Exit(1)
+			}
+			taskReconciler.EgressPolicy = policy
+			slog.Info("applying egress policy to task actors", "file", egressPolicyFile, "rules", len(policy.GetRules()))
+		}
+		reconciler = taskReconciler
 	}
 
 	srv := server.NewServer(rStore, server.Options{
