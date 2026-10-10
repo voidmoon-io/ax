@@ -146,10 +146,19 @@ metadata:
   atespace: default
 spec:
   provider: anthropic
-  model: claude-opus-5
+  model: claude-sonnet-5-5
   secretKey:
     name: anthropic-api-secret
     key: ANTHROPIC_API_KEY
   parameters:
     maxTokens: 16000
 ```
+
+`maxTokens` becomes the Messages API's `max_tokens` (4096 when unset). To keep
+the key out of AX entirely, omit `secretKey` and point `parameters.baseURL` at a
+proxy that adds the `x-api-key` header; the base URL excludes the `/v1` segment.
+
+The agent inside a sandbox has no native Anthropic client. It reaches Claude
+through Anthropic's OpenAI-compatible endpoint instead: set `AX_MODEL_BASE_URL`
+to `https://api.anthropic.com/v1` (or a key-adding proxy in front of it) and
+`AX_MODEL_NAME` to the Claude model.

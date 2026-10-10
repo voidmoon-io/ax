@@ -357,6 +357,121 @@ func TestClient_OpenAIProviderRequiresBaseURL(t *testing.T) {
 	}
 }
 
+// TestClient_AnthropicProvider exercises the Messages API path: the system
+// instruction goes in the top-level system field, maxTokens from the Model's
+// parameters becomes max_tokens, the key is sent as x-api-key, and only text
+// blocks make up the content.
+func TestClient_AnthropicProvider(t *testing.T) {
+	var gotPath, gotKey, gotVersion string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Errorf("decoding request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"plan "},{"type":"text","text":"ready"}],`+
+			`"usage":{"input_tokens":11,"output_tokens":3}}`)
+	}))
+	defer ts.Close()
+
+	crd := &v1alpha1.Model{
+		Metadata: &v1alpha1.ObjectMeta{Name: "claude-model", Atespace: "default"},
+		Spec: &v1alpha1.ModelSpec{
+			Provider: "anthropic",
+			Model:    "claude-sonnet-5-5",
+			Parameters: params(t, map[string]any{
+				"baseURL":           ts.URL,
+				"maxTokens":         16000,
+				"systemInstruction": "be brief",
+			}),
+		},
+	}
+
+	client := model.NewClientFromCRD(crd, model.WithAPIKey("sk-ant-test"))
+	resp, err := client.Generate(context.Background(), &model.GenerateRequest{Prompt: "Bootstrap workspace"})
+	if err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if gotPath != "/v1/messages" {
+		t.Errorf("expected /v1/messages, got %s", gotPath)
+	}
+	if gotKey != "sk-ant-test" {
+		t.Errorf("expected x-api-key sk-ant-test, got %q", gotKey)
+	}
+	if gotVersion == "" {
+		t.Error("expected an anthropic-version header")
+	}
+	if gotBody["system"] != "be brief" {
+		t.Errorf("expected system instruction in the system field, got %v", gotBody["system"])
+	}
+	if gotBody["max_tokens"] != float64(16000) {
+		t.Errorf("expected max_tokens 16000 from parameters, got %v", gotBody["max_tokens"])
+	}
+	for _, k := range []string{"maxTokens", "baseURL", "systemInstruction"} {
+		if _, ok := gotBody[k]; ok {
+			t.Errorf("%s should not be sent to the provider as-is", k)
+		}
+	}
+	if resp.Content != "plan ready" {
+		t.Errorf("expected content 'plan ready', got %q", resp.Content)
+	}
+	if resp.Usage.TotalTokens != 14 {
+		t.Errorf("expected 14 total tokens, got %d", resp.Usage.TotalTokens)
+	}
+}
+
+// TestClient_AnthropicProviderDefaults checks that a request without a key
+// (for a key-adding proxy) sends no x-api-key, and that max_tokens, which the
+// Messages API requires, is always set.
+func TestClient_AnthropicProviderDefaults(t *testing.T) {
+	var gotKeys []string
+	var gotBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotKeys = r.Header.Values("x-api-key")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		fmt.Fprint(w, `{"content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer ts.Close()
+
+	client := model.NewClient(model.Config{Name: "claude", Provider: "anthropic", Model: "claude-haiku-5-5"}, model.WithBaseURL(ts.URL))
+	if _, err := client.Generate(context.Background(), &model.GenerateRequest{Prompt: "hi"}); err != nil {
+		t.Fatalf("generate failed: %v", err)
+	}
+	if len(gotKeys) != 0 {
+		t.Errorf("expected no x-api-key without a key, got %v", gotKeys)
+	}
+	if _, ok := gotBody["max_tokens"]; !ok {
+		t.Error("expected a default max_tokens")
+	}
+	if _, ok := gotBody["system"]; ok {
+		t.Error("expected no system field without a system instruction")
+	}
+}
+
+// TestClient_NonGoogleDefaultModelGetsNoGeminiKey checks that a default-model
+// served by another provider is not given the Gemini secret as its key.
+func TestClient_NonGoogleDefaultModelGetsNoGeminiKey(t *testing.T) {
+	resolver := model.WithSecretResolver(func(name, key string) (string, error) {
+		return "gemini-key", nil
+	})
+	for _, provider := range []string{"anthropic", "openai"} {
+		crd := &v1alpha1.Model{
+			Metadata: &v1alpha1.ObjectMeta{Name: model.DefaultModelResourceName, Atespace: "default"},
+			Spec:     &v1alpha1.ModelSpec{Provider: provider, Model: "m"},
+		}
+		client := model.NewClientFromCRD(crd, resolver)
+		if ref := client.Config().SecretKey; ref != nil {
+			t.Errorf("%s: expected no secret reference, got %s/%s", provider, ref.Name, ref.Key)
+		}
+		if key := client.Config().APIKey; key != "" {
+			t.Errorf("%s: expected no API key, got %q", provider, key)
+		}
+	}
+}
+
 // params builds a Struct for a ModelSpec's parameters, failing the test on
 // unsupported value types.
 func params(t *testing.T, m map[string]any) *structpb.Struct {
