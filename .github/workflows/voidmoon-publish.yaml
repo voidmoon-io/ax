@@ -1,10 +1,10 @@
-# shart-cloud fork only: builds the AX control plane with ko and the task runner
-# image with docker, pushes them to ghcr.io/shart-cloud/ax/*, and uploads the
+# voidmoon-io fork only: builds the AX control plane with ko and the task runner
+# image with docker, pushes them to ghcr.io/voidmoon-io/ax/*, and uploads the
 # digest-pinned deploy manifests as an artifact for talos-gitops.
 #
 # Upstream's default task image (gcr.io/ax-substrate/...) is private and
 # hard-coded, so every Task must set spec.image to the task runner built here.
-name: shart-cloud publish
+name: voidmoon publish
 
 on:
   workflow_dispatch:
@@ -32,13 +32,13 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Logs in to ghcr.io and sets KO_DOCKER_REPO=ghcr.io/shart-cloud/ax.
+      # Logs in to ghcr.io and sets KO_DOCKER_REPO=ghcr.io/voidmoon-io/ax.
       - uses: ko-build/setup-ko@v0.9
 
       - name: Test
         run: go test ./...
 
-      # Branch refs (shart-cloud/openai-provider) aren't valid image tags.
+      # Branch refs (voidmoon/anthropic) aren't valid image tags.
       - name: Image tag
         run: echo "TAG=$(echo '${{ inputs.ref }}' | tr '/' '-')" >> "$GITHUB_ENV"
 
@@ -65,7 +65,7 @@ jobs:
       - name: Build and push task runner
         run: |
           set -o errexit -o nounset -o pipefail
-          image="ghcr.io/shart-cloud/ax/ax-task-runner:${TAG}"
+          image="ghcr.io/voidmoon-io/ax/ax-task-runner:${TAG}"
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
             -o bin/linux_amd64/ax-task-runner ./cmd/ax-task-runner
           # Upstream .dockerignore excludes bin/, which Dockerfile.task-runner
