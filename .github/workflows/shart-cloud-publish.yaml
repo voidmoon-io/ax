@@ -36,7 +36,7 @@ jobs:
       - uses: ko-build/setup-ko@v0.9
 
       - name: Test
-        run: go test ./internal/controller/... ./internal/model/... ./internal/workspace/... ./internal/metadata/...
+        run: go test ./...
 
       # Branch refs (shart-cloud/openai-provider) aren't valid image tags.
       - name: Image tag
@@ -47,7 +47,11 @@ jobs:
           set -o errexit -o nounset -o pipefail
           mkdir -p out
           cp deploy/redis.yaml out/
-          ko resolve -B -t "${TAG}" -f deploy/ax-controller.yaml > out/ax-controller.yaml
+          # Upstream folded ax-controller into ax-server after v0.3.1
+          # (google/ax@ac23328); older refs still ship it.
+          if [[ -f deploy/ax-controller.yaml ]]; then
+            ko resolve -B -t "${TAG}" -f deploy/ax-controller.yaml > out/ax-controller.yaml
+          fi
           ko resolve -B -t "${TAG}" -f deploy/ax-server.yaml > out/ax-server.yaml
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o out/ax ./cmd/ax
           git rev-parse HEAD > out/SOURCE_COMMIT
