@@ -538,7 +538,7 @@ func (c *Client) EnsureActorEgressPolicy(ctx context.Context, atespace, actorNam
 		Rules:    rules,
 	}
 
-	existing, err := c.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef})
+	existing, err := c.control.GetActorEgressPolicy(ctx, &ateapipb.GetActorEgressPolicyRequest{Actor: actorRef, Name: egressPolicyName})
 	if status.Code(err) == codes.NotFound {
 		_, err = c.control.CreateActorEgressPolicy(ctx, &ateapipb.CreateActorEgressPolicyRequest{Actor: actorRef, EgressPolicy: want})
 		if err != nil {

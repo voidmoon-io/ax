@@ -541,6 +541,10 @@ type mockEgressControlClient struct {
 }
 
 func (m *mockEgressControlClient) GetActorEgressPolicy(ctx context.Context, req *ateapipb.GetActorEgressPolicyRequest, opts ...grpc.CallOption) (*ateapipb.EgressPolicy, error) {
+	// Substrate v0.5.0 rejects a lookup that does not name the policy.
+	if req.GetName() == "" {
+		return nil, status.Error(codes.InvalidArgument, "name: Required value")
+	}
 	if m.existing == nil {
 		return nil, status.Error(codes.NotFound, "egress policy not found")
 	}
