@@ -436,6 +436,13 @@ func TestValidateTask(t *testing.T) {
 			spec:    &v1alpha1.TaskSpec{Workspace: &v1alpha1.WorkspaceRef{Name: "a", Path: "rel"}},
 			wantErr: "spec.workspace: path \"rel\" must be absolute",
 		},
+		{name: "gvisor", spec: &v1alpha1.TaskSpec{SandboxClass: "gvisor"}},
+		{name: "microvm", spec: &v1alpha1.TaskSpec{SandboxClass: "microvm"}},
+		{
+			name:    "unknown sandbox class",
+			spec:    &v1alpha1.TaskSpec{SandboxClass: "kata"},
+			wantErr: "spec.sandboxClass: \"kata\" is not one of",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -593,5 +600,15 @@ func TestUnmarshalYAMLLenient_NormalizesWorkspace(t *testing.T) {
 	}
 	if got := ws.GetSpec().GetMcp().GetServers(); len(got) != 1 || got[0].GetName() != "srv" {
 		t.Errorf("mcp servers = %v, want one named srv", got)
+	}
+}
+
+func TestTask_SandboxClass_YAML(t *testing.T) {
+	var task v1alpha1.Task
+	if err := yaml.Unmarshal([]byte("apiVersion: ax.io/v1alpha1\nkind: Task\nmetadata:\n  name: vm\nspec:\n  sandboxClass: microvm\n"), &task); err != nil {
+		t.Fatalf("unmarshaling task: %v", err)
+	}
+	if got := task.GetSpec().GetSandboxClass(); got != v1alpha1.SandboxClassMicroVM {
+		t.Fatalf("spec.sandboxClass = %q, want %q", got, v1alpha1.SandboxClassMicroVM)
 	}
 }

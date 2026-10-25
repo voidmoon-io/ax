@@ -321,7 +321,8 @@ func ResourceLimits(reqs *v1alpha1.ResourcesSpec) *ateapipb.Resources {
 
 // BuildActorTemplate constructs a Substrate ActorTemplate based on the standard ate-env specification.
 // A nil resources leaves the sandbox sized by the worker defaults.
-func BuildActorTemplate(atespace, name, image string, envMap map[string]string, command []string, snapshotsBucket string, resources *ateapipb.Resources) *ateapipb.ActorTemplate {
+// sandboxClass is a v1alpha1 spec.sandboxClass; empty means gVisor.
+func BuildActorTemplate(atespace, name, image string, envMap map[string]string, command []string, snapshotsBucket string, resources *ateapipb.Resources, sandboxClass string) *ateapipb.ActorTemplate {
 	if atespace == "" {
 		atespace = "default"
 	}
@@ -377,17 +378,23 @@ func BuildActorTemplate(atespace, name, image string, envMap map[string]string, 
 			StorageLocation:   snapshotsBucket,
 			PreferredFidelity: ateapipb.SnapshotFidelity_SNAPSHOT_FIDELITY_VOLUMES,
 		},
-		SandboxConfig: &ateapipb.SandboxConfig{
-			SandboxClass: sandboxclass.GVisor,
-			ConfigName:   "gvisor-default",
-		},
+		SandboxConfig: SandboxConfigFor(sandboxClass),
 		Resources: resources,
 	}
 }
 
+// SandboxConfigFor maps a v1alpha1 spec.sandboxClass onto the cluster-wide
+// SandboxConfig Substrate ships for that class.
+func SandboxConfigFor(class string) *ateapipb.SandboxConfig {
+	if class == v1alpha1.SandboxClassMicroVM {
+		return &ateapipb.SandboxConfig{SandboxClass: sandboxclass.MicroVM, ConfigName: "microvm"}
+	}
+	return &ateapipb.SandboxConfig{SandboxClass: sandboxclass.GVisor, ConfigName: "gvisor-default"}
+}
+
 // EnsureActorTemplateWithImage creates an ActorTemplate using the specified container image,
 // resource limits (nil for worker defaults), and optional environment variables.
-func (c *Client) EnsureActorTemplateWithImage(ctx context.Context, baseAtespace, baseTemplate, targetAtespace, targetTemplate, image string, resources *ateapipb.Resources, extraEnv ...map[string]string) (*ateapipb.ActorTemplate, error) {
+func (c *Client) EnsureActorTemplateWithImage(ctx context.Context, baseAtespace, baseTemplate, targetAtespace, targetTemplate, image string, resources *ateapipb.Resources, sandboxClass string, extraEnv ...map[string]string) (*ateapipb.ActorTemplate, error) {
 	existing, err := c.GetActorTemplate(ctx, targetAtespace, targetTemplate)
 	if err == nil && existing != nil {
 		return existing, nil
@@ -400,7 +407,7 @@ func (c *Client) EnsureActorTemplateWithImage(ctx context.Context, baseAtespace,
 		}
 	}
 
-	tmpl := BuildActorTemplate(targetAtespace, targetTemplate, image, envMap, nil, "", resources)
+	tmpl := BuildActorTemplate(targetAtespace, targetTemplate, image, envMap, nil, "", resources, sandboxClass)
 	req := &ateapipb.CreateActorTemplateRequest{
 		ActorTemplate: tmpl,
 	}

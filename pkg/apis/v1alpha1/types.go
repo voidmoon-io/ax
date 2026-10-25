@@ -319,5 +319,25 @@ func ValidateTask(t *Task) error {
 			return fmt.Errorf("spec.workspace: path %q must be absolute", p)
 		}
 	}
+	if err := ValidateSandboxClass(spec.GetSandboxClass()); err != nil {
+		return err
+	}
 	return ValidateResources(spec.GetResources())
+}
+
+// Sandbox classes a task may name in spec.sandboxClass. Empty means
+// SandboxClassGVisor.
+const (
+	SandboxClassGVisor  = "gvisor"
+	SandboxClassMicroVM = "microvm"
+)
+
+// ValidateSandboxClass reports whether class names a sandbox runtime AX can
+// place a task in.
+func ValidateSandboxClass(class string) error {
+	switch class {
+	case "", SandboxClassGVisor, SandboxClassMicroVM:
+		return nil
+	}
+	return fmt.Errorf("spec.sandboxClass: %q is not one of %q or %q", class, SandboxClassGVisor, SandboxClassMicroVM)
 }

@@ -32,7 +32,13 @@ spec:
     goal: "Install dependencies and run the test suite"   # Antigravity prepares the workspace to this goal on first run
 
   debug: true   # serve guest services inside the sandbox so `ax ssh` works; off by default
+
+  sandboxClass: microvm   # optional: gvisor (default) or microvm, a Kata guest with its own kernel
 ```
+
+### Sandbox class
+
+`spec.sandboxClass` picks the Agent Substrate runtime: `gvisor`, the default, or `microvm`, a Kata guest on Cloud Hypervisor. A micro-VM task gets its own kernel, so it can run workloads gVisor cannot, such as Docker or a kind cluster, at the cost of a VM per task. It needs a `microvm` WorkerPool on nodes with `/dev/kvm` and the cluster-wide `microvm` SandboxConfig; without one the task stays Pending. Changing the class re-provisions the task's ActorTemplate.
 
 ### Image references
 

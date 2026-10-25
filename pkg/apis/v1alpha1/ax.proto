@@ -80,6 +80,11 @@ message TaskSpec {
   // debug enables the in-container guest services (process execution and file
   // access) that back `ax ssh`. Off by default.
   bool debug = 6;
+  // sandbox_class selects the Agent Substrate runtime the task runs in:
+  // "gvisor" (the default when empty) or "microvm", a Kata guest on Cloud
+  // Hypervisor with its own kernel. A microvm task needs a microvm WorkerPool
+  // and the cluster-wide "microvm" SandboxConfig.
+  string sandbox_class = 7;
 }
 
 message EnvVar {

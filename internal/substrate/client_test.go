@@ -207,7 +207,7 @@ func TestClient_DeleteActor_PropagatesRPCError(t *testing.T) {
 func TestBuildActorTemplate(t *testing.T) {
 	t.Setenv("AX_SNAPSHOTS_BUCKET", "gs://ate-snapshots/ax/")
 
-	tmpl := BuildActorTemplate("", "test-tmpl", "", map[string]string{"FOO": "BAR"}, nil, "", nil)
+	tmpl := BuildActorTemplate("", "test-tmpl", "", map[string]string{"FOO": "BAR"}, nil, "", nil, "")
 	if tmpl.GetMetadata().GetAtespace() != "default" {
 		t.Errorf("expected default atespace, got %q", tmpl.GetMetadata().GetAtespace())
 	}
@@ -320,6 +320,7 @@ func TestClient_EnsureActorTemplateWithImage_Success(t *testing.T) {
 		"task-1-tmpl-abcd",
 		"custom-image:v1",
 		nil,
+		"",
 		map[string]string{"FOO": "BAR"},
 	)
 	if err != nil {
@@ -355,6 +356,7 @@ func TestClient_EnsureActorTemplateWithImage_PropagatesError(t *testing.T) {
 		"task-1-tmpl-abcd",
 		"custom-image:v1",
 		nil,
+		"",
 	)
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -501,16 +503,32 @@ func TestBuildActorTemplate_Resources(t *testing.T) {
 		{Name: "cpu", Quantity: "2"},
 		{Name: "memory", Quantity: "4Gi"},
 	}}
-	tmpl := BuildActorTemplate("default", "task-tmpl-01234567", "ghcr.io/my-org/agent@sha256:abc", nil, nil, "", limits)
+	tmpl := BuildActorTemplate("default", "task-tmpl-01234567", "ghcr.io/my-org/agent@sha256:abc", nil, nil, "", limits, "")
 	if !proto.Equal(tmpl.GetResources(), limits) {
 		t.Fatalf("template resources = %v, want %v", tmpl.GetResources(), limits)
 	}
 
 	// Without limits the template must not carry a resources block, so the
 	// worker defaults keep applying.
-	tmpl = BuildActorTemplate("default", "task-tmpl-01234567", "ghcr.io/my-org/agent@sha256:abc", nil, nil, "", nil)
+	tmpl = BuildActorTemplate("default", "task-tmpl-01234567", "ghcr.io/my-org/agent@sha256:abc", nil, nil, "", nil, "")
 	if tmpl.GetResources() != nil {
 		t.Fatalf("template without limits has resources %v, want none", tmpl.GetResources())
+	}
+}
+
+func TestBuildActorTemplate_SandboxClass(t *testing.T) {
+	for _, tc := range []struct {
+		class, wantClass, wantConfig string
+	}{
+		{class: "", wantClass: sandboxclass.GVisor, wantConfig: "gvisor-default"},
+		{class: v1alpha1.SandboxClassGVisor, wantClass: sandboxclass.GVisor, wantConfig: "gvisor-default"},
+		{class: v1alpha1.SandboxClassMicroVM, wantClass: sandboxclass.MicroVM, wantConfig: "microvm"},
+	} {
+		tmpl := BuildActorTemplate("default", "task-tmpl-01234567", "ghcr.io/my-org/agent@sha256:abc", nil, nil, "", nil, tc.class)
+		cfg := tmpl.GetSandboxConfig()
+		if cfg.GetSandboxClass() != tc.wantClass || cfg.GetConfigName() != tc.wantConfig {
+			t.Errorf("sandboxClass %q: got %s/%s, want %s/%s", tc.class, cfg.GetSandboxClass(), cfg.GetConfigName(), tc.wantClass, tc.wantConfig)
+		}
 	}
 }
 

@@ -204,7 +204,7 @@ func (r *TaskReconciler) Reconcile(ctx context.Context, task *v1alpha1.Task, ws 
 
 		// spec.resources rides along in AX_TASK_YAML, so a limits change is already
 		// part of the template digest and re-provisions the template.
-		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, resources, extraEnv)
+		tmpl, err := r.client.EnsureActorTemplateWithImage(ctx, templateAtespace, templateName, atespace, customTemplateName, task.Spec.Image, resources, task.Spec.GetSandboxClass(), extraEnv)
 		if err != nil {
 			if substrate.IsTransientError(err) {
 				r.setNotReady(task, "SubstrateUnavailable", err.Error(), now)

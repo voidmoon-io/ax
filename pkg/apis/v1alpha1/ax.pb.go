@@ -187,7 +187,12 @@ type TaskSpec struct {
 	Workspace *WorkspaceRef `protobuf:"bytes,5,opt,name=workspace,proto3" json:"workspace,omitempty"`
 	// debug enables the in-container guest services (process execution and file
 	// access) that back `ax ssh`. Off by default.
-	Debug         bool `protobuf:"varint,6,opt,name=debug,proto3" json:"debug,omitempty"`
+	Debug bool `protobuf:"varint,6,opt,name=debug,proto3" json:"debug,omitempty"`
+	// sandbox_class selects the Agent Substrate runtime the task runs in:
+	// "gvisor" (the default when empty) or "microvm", a Kata guest on Cloud
+	// Hypervisor with its own kernel. A microvm task needs a microvm WorkerPool
+	// and the cluster-wide "microvm" SandboxConfig.
+	SandboxClass  string `protobuf:"bytes,7,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -262,6 +267,13 @@ func (x *TaskSpec) GetDebug() bool {
 		return x.Debug
 	}
 	return false
+}
+
+func (x *TaskSpec) GetSandboxClass() string {
+	if x != nil {
+		return x.SandboxClass
+	}
+	return ""
 }
 
 type EnvVar struct {
@@ -2448,14 +2460,15 @@ const file_pkg_apis_v1alpha1_ax_proto_rawDesc = "" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x123\n" +
 	"\bmetadata\x18\x03 \x01(\v2\x17.ax.v1alpha1.ObjectMetaR\bmetadata\x12)\n" +
 	"\x04spec\x18\x04 \x01(\v2\x15.ax.v1alpha1.TaskSpecR\x04spec\x12/\n" +
-	"\x06status\x18\x05 \x01(\v2\x17.ax.v1alpha1.TaskStatusR\x06status\"\xea\x01\n" +
+	"\x06status\x18\x05 \x01(\v2\x17.ax.v1alpha1.TaskStatusR\x06status\"\x8f\x02\n" +
 	"\bTaskSpec\x12\x14\n" +
 	"\x05image\x18\x01 \x01(\tR\x05image\x12\x18\n" +
 	"\acommand\x18\x02 \x03(\tR\acommand\x12%\n" +
 	"\x03env\x18\x03 \x03(\v2\x13.ax.v1alpha1.EnvVarR\x03env\x128\n" +
 	"\tresources\x18\x04 \x01(\v2\x1a.ax.v1alpha1.ResourcesSpecR\tresources\x127\n" +
 	"\tworkspace\x18\x05 \x01(\v2\x19.ax.v1alpha1.WorkspaceRefR\tworkspace\x12\x14\n" +
-	"\x05debug\x18\x06 \x01(\bR\x05debug\"2\n" +
+	"\x05debug\x18\x06 \x01(\bR\x05debug\x12#\n" +
+	"\rsandbox_class\x18\a \x01(\tR\fsandboxClass\"2\n" +
 	"\x06EnvVar\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"y\n" +
