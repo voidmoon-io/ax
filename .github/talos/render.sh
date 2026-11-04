@@ -14,11 +14,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-# Runs every root-gated test package under sudo. A package is root-gated when
-# its tests import internal/roottest (the tests self-skip unless run as root),
-# so adding privileged tests anywhere picks them up here with no CI change.
-# Extra arguments are passed through to `go test` (e.g. -v, -run).
-
 set -o errexit -o nounset -o pipefail
 
 set -o errexit -o nounset -o pipefail
