@@ -1,0 +1,92 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: voidmoon CI on Talos
+'on':
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish this tested commit and upload deployment manifests
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: voidmoon-ci-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  run-tests:
+    runs-on: voidmoon-ci
+    timeout-minutes: 60
+    if: github.repository == 'voidmoon-io/ax' && github.event_name == 'workflow_dispatch'
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        persist-credentials: false
+    - name: Start isolated Docker
+      run: bash .github/talos/prepare.sh
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: Test and build
+      run: bash .github/talos/test.sh
+  publish:
+    runs-on: voidmoon-ci
+    env:
+      KO_DEFAULTPLATFORMS: linux/amd64
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      with:
+        fetch-depth: 0
+        persist-credentials: false
+    - name: Start isolated Docker
+      run: bash .github/talos/prepare.sh
+    - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+      with:
+        go-version-file: go.mod
+        cache: false
+    - uses: ko-build/setup-ko@d006021bd0c28d1ce33a07e7943d48b079944c8d
+      with:
+        version: v0.19.1
+        use-sudo: true
+    - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+      with:
+        version: v0.38.2
+        driver-opts: image=moby/buildkit@sha256:c5f8862f52499773af85bc07695b2379ef08e8002352b0df2c4864c91d78dabe
+    - name: Test
+      run: bash .github/talos/publish-test.sh
+    - name: Image tag
+      run: bash .github/talos/image-tag.sh
+    - name: Render control plane
+      run: bash .github/talos/render.sh
+    - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build and push task runner
+      run: bash .github/talos/runner-image.sh
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ax-manifests
+        path: out/
+        retention-days: 7
+    timeout-minutes: 120
+    needs:
+    - run-tests
+    if: inputs.publish && github.event_name == 'workflow_dispatch'
+    permissions:
+      contents: read
+      packages: write
